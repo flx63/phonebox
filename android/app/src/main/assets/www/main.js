@@ -22,6 +22,8 @@ import './widgets/spectrum.js';
 // (adb reverse) or Wi-Fi to the computer.
 
 export const API = '/agent/api';
+export const PWA = document.body.classList.contains('pwa');
+const panelVisible = () => !PWA || (!document.hidden && document.body.dataset.pwaSession === 'paired');
 // The phone's native proxy only forwards requests that carry this header (or image GETs), so script in a sandboxed
 // Custom HTML widget cannot reach the agent: adding the header to a cross-origin request needs a CORS preflight,
 // which the proxy refuses. See MainActivity.fromPanel.
@@ -102,7 +104,7 @@ export const D = { state: null, quotas: null, work: null, procs: null, push: {},
 
 export const HIST = 90;
 export const hist = { cpu: [], gpu: [], ram: [], vram: [], down: [], up: [], ping: [], gputemp: [], cputemp: [], hotspot: [], gpupower: [], gpuclock: [] };
-export const pushHist = (k, v) => { const a = hist[k]; a.push(v ?? 0); if (a.length > HIST) a.shift(); };
+export const pushHist = (k, v) => { const a = hist[k]; a.push(v ?? null); if (a.length > HIST) a.shift(); };
 
 // ---------------------------------------------------------------- helpers
 /** fetch() to the panel's local/USB feed proxy when the phone cannot reach an allowed public HTTPS feed directly. */
@@ -110,7 +112,7 @@ export async function safeFetch(url, opts = {}) {
   try {
     return await fetch(url, opts);
   } catch (e) {
-    if (!opts.signal?.aborted && typeof url === 'string' && url.startsWith('https://')) {
+    if (!PWA && !opts.signal?.aborted && typeof url === 'string' && url.startsWith('https://')) {
       return await fetch(`${API}/proxy?url=${encodeURIComponent(url)}`, {
         ...opts,
         headers: { ...(opts.headers || {}), ...PANEL_HEADERS },
@@ -130,6 +132,7 @@ export async function api(path, method = 'GET', timeout = 2500) {
   try {
     const work = (async () => {
       const r = await fetch(API + path, { method, signal: ctl.signal, cache: 'no-store', headers: PANEL_HEADERS });
+      if (PWA && r.status === 401) window.dispatchEvent(new Event('phonebox-session-required'));
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const ct = r.headers.get('content-type') || '';
       // Awaited on purpose: the timer is cleared in finally, so returning the promise unawaited let a response that
@@ -260,21 +263,28 @@ export function chart(canvas, series, opts = {}) {
     const step = w / (HIST - 1);
     const x0 = w - (d.length - 1) * step;
     const y = (v) => hh - (Math.min(v, max) / max) * (hh - top);
-    g.beginPath();
-    g.moveTo(x0, y(d[0]));
-    for (let i = 1; i < d.length; i++) g.lineTo(x0 + i * step, y(d[i]));
     g.lineWidth = 1.6 * dpr;
     g.strokeStyle = s.color;
     g.lineJoin = 'round';
-    g.stroke();
-    g.lineTo(w, hh);
-    g.lineTo(x0, hh);
-    g.closePath();
     const grad = g.createLinearGradient(0, 0, 0, hh);
     grad.addColorStop(0, s.color + '55');
     grad.addColorStop(1, s.color + '00');
     g.fillStyle = grad;
-    g.fill();
+    for (let i = 0; i < d.length; i++) {
+      if (!Number.isFinite(d[i])) continue;
+      const start = x0 + i * step;
+      g.beginPath();
+      g.moveTo(start, y(d[i]));
+      while (i + 1 < d.length && Number.isFinite(d[i + 1])) {
+        i++;
+        g.lineTo(x0 + i * step, y(d[i]));
+      }
+      g.stroke();
+      g.lineTo(x0 + i * step, hh);
+      g.lineTo(start, hh);
+      g.closePath();
+      g.fill();
+    }
   }
 }
 
@@ -404,7 +414,7 @@ export async function loadWeather(force = false) {
   if (cached && cached.key === key && !D.weather) { D.weather = cached.data; weatherFor = key; emit('weather'); }
   if (!force && cached && cached.key === key && Date.now() - cached.at < 14 * 60_000) return;
   // only while a page shows the weather (PRIVACY.md): no widget, no request with the location
-  if (!anyNeeds('weather')) return;
+  if (!panelVisible() || !anyNeeds('weather')) return;
   try {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
       '&current=temperature_2m,apparent_temperature,weather_code,is_day' +
@@ -1013,7 +1023,7 @@ export function buildLayout() {
   if (key === layoutKey) return;
   layoutKey = key;
   lastHour12 = h12;
-  const prevId = pages[curPage]?.id;
+  const prevId = pages[curPage]?.id ?? (PWA ? store.get('pwa-page', null) : null);
   pages = next;
   for (const m of mounted) { try { m.inst.destroy?.(); } catch (_) {} }
   mounted = [];
@@ -1461,12 +1471,13 @@ export function onScroll() {
   if (p === curPage) return;
   const prev = curPage;
   curPage = p;
+  if (PWA && cfgVersion !== null && pages[p]) store.set('pwa-page', pages[p].id);
   if (prev >= 0 && pagePaused) setPagePaused(false, { feedback: false, resume: false });
   updateDots();
   flashTitle();
   setActive();
   if (sheet) closeSheet();
-  if (pageOf('procs')) loadProcs();
+  if (panelVisible() && pageOf('procs')) loadProcs();
 }
 pager.addEventListener('scroll', onScroll, { passive: true });
 
@@ -1761,7 +1772,7 @@ export function tick() {
   }
   applyBurnIn();
   document.body.classList.toggle('controls-top', cfg.display?.controlsTop === true);
-  if (!nightOn) emit('tick');
+  if (!nightOn && panelVisible()) emit('tick');
   setTimeout(tick, 1000 - (Date.now() % 1000) + 5);
 }
 
@@ -1800,8 +1811,8 @@ export async function loadConfig() {
       store.set('cfg', cfg);
       buildLayout();
       applyDisplay();
-      loadWeather();
     }
+    loadWeather();
   } catch (_) {}
 }
 
@@ -1882,7 +1893,7 @@ export function applyState(s, replayGen = null) {
       pushHist('gpu', pc.gpu?.util);
       pushHist('ram', pc.ramUsedGb);
       const mem = gpuMem(pc.gpu);
-      pushHist('vram', mem ? (mem.used / mem.total) * 100 : 0);
+      pushHist('vram', mem ? (mem.used / mem.total) * 100 : null);
       pushHist('down', pc.netDownBps);
       pushHist('up', pc.netUpBps);
       pushHist('ping', s.ping?.ms);
@@ -1917,7 +1928,7 @@ export const streaming = () => streamOn && Date.now() - lastStateAt < 3000;
 export async function poll() {
   // a pending replay must go through even while the stream is live: the stream only sends events newer than
   // its own connect, so the poll is the only way to get the ones the restarted agent queued before it
-  if (!streaming() || evReplay) {
+  if (panelVisible() && (!streaming() || evReplay)) {
     const replay = evReplay, gen = evGen;
     try {
       const s = await api('/state' + (replay ? '?ev=0' : evSeq != null ? '?ev=' + evSeq : ''));
@@ -1936,12 +1947,12 @@ applyDisplay();
 tick();
 loadWeather();
 setInterval(loadWeather, 15 * 60_000);
-setInterval(() => { if (!nightOn) emit('fast'); }, 250);
-setInterval(() => { if (online && anyNeeds('quotas')) loadQuotas(); }, 30_000);
-setInterval(() => { if (online && anyNeeds('calendar')) loadCalendar(); }, 120_000);
-setInterval(() => { if (online && anyNeeds('work') && !streaming()) loadWork(); }, 3000);
-setInterval(() => { if (online && pageOf('procs')) loadProcs(); if (online && sheet) loadSheet(); }, 2000);
-setInterval(() => { if (online) loadConfig(); }, 60_000);
+setInterval(() => { if (!nightOn && panelVisible()) emit('fast'); }, 250);
+setInterval(() => { if (panelVisible() && online && anyNeeds('quotas')) loadQuotas(); }, 30_000);
+setInterval(() => { if (panelVisible() && online && anyNeeds('calendar')) loadCalendar(); }, 120_000);
+setInterval(() => { if (panelVisible() && online && anyNeeds('work') && !streaming()) loadWork(); }, 3000);
+setInterval(() => { if (panelVisible() && online && pageOf('procs')) loadProcs(); if (panelVisible() && online && sheet) loadSheet(); }, 2000);
+setInterval(() => { if (panelVisible() && online) loadConfig(); }, 60_000);
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && lastHour12 !== null && hour12() !== lastHour12) {
     buildLayout();

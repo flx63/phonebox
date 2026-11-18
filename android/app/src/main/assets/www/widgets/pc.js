@@ -1,4 +1,4 @@
-import { $, API, D, PANEL_HEADERS, LOCALE, Q_STYLE, api, bridge, cfg, color, cssVar, rulesPaused, toggleRulesPause, fillIcon, fmtDur, fmtHM, fmtMem, gotoPageRef, gpuMem, gpusOf, h, haptic, openSheet, paceInfo, pad, pairedPcs, quotaProviders, r1, shortGpu, store, switchPc, t, tick, toast, transport } from '../main.js';
+import { $, API, D, PANEL_HEADERS, PWA, LOCALE, Q_STYLE, api, bridge, cfg, color, cssVar, rulesPaused, toggleRulesPause, fillIcon, fmtDur, fmtHM, fmtMem, gotoPageRef, gpuMem, gpusOf, h, haptic, openSheet, paceInfo, pad, pairedPcs, quotaProviders, r1, shortGpu, store, switchPc, t, tick, toast, transport } from '../main.js';
 import { W } from '../registry.js';
 import { canKillAnywhere, dialEl, every } from './helpers.js';
 
@@ -573,13 +573,15 @@ W.onair = {
   },
 };
 
+W['meeting-status'] = W.onair;
+
 W.battery = {
   needs: ['tick'],
   create(box) {
     const dial = dialEl(), sub = h('div', 'g-sub');
     box.append(dial, h('div', 'g-label', 'PHONE'), sub);
     const load = every(20_000, () => {
-      if (!bridge) { dial.set(0, '—'); sub.textContent = 'Only on the phone'; return; }
+      if (!bridge) { dial.set(0, '—'); sub.textContent = PWA ? 'Device battery is unavailable in the web app' : 'Only on the phone'; return; }
       try {
         const b = JSON.parse(bridge.battery());
         box.style.setProperty('--q', b.plugged ? '#22c55e' : b.level <= 20 ? '#ef4444' : b.level <= 40 ? '#f59e0b' : '#84cc16');
@@ -604,7 +606,7 @@ W.pcswitch = {
       const key = JSON.stringify([pcs, usb, !!bridge]);
       if (key === shown) return;
       shown = key;
-      if (!bridge) { row.replaceChildren(h('div', 'empty', 'Only on the phone')); sub.textContent = ''; return; }
+      if (!bridge) { row.replaceChildren(h('div', 'empty', PWA ? 'Open the web app for the other computer' : 'Only on the phone')); sub.textContent = ''; return; }
       if (pcs.length < 2) {
         row.replaceChildren(h('div', 'empty', pcs.length ? 'Pair another computer over Wi-Fi to switch here' : 'No computer paired over Wi-Fi'));
         sub.textContent = '';
@@ -781,7 +783,7 @@ W.chargecare = {
       band.style.strokeDasharray = `${(C * (max - min)) / 100} ${C}`;
       band.style.strokeDashoffset = String((-C * min) / 100);
       band.style.opacity = ch.enabled ? '' : '0';
-      if (!bridge?.battery) { q('.cc-pct').textContent = '—'; q('.cc-text').textContent = 'Only on the phone'; return; }
+      if (!bridge?.battery) { q('.cc-pct').textContent = '—'; q('.cc-text').textContent = PWA ? 'iOS charging control is unavailable in the web app' : 'Only on the phone'; return; }
       let b;
       try { b = JSON.parse(bridge.battery()); } catch (_) { return; }
       if (!(b.level >= 0)) return;

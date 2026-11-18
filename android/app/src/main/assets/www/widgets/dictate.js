@@ -1,4 +1,4 @@
-import { API, PANEL_HEADERS, bridge, curPage, h, haptic, icon, pages, t, toast } from '../main.js';
+import { API, PANEL_HEADERS, PWA, bridge, curPage, h, haptic, icon, pages, t, toast } from '../main.js';
 import { W } from '../registry.js';
 
 // ---------------------------------------------------------------- dictation
@@ -11,6 +11,48 @@ import { W } from '../registry.js';
 // session never ends or answers another's.
 const sessions = new Map();
 window.onAndroidSpeech = (kind, text, id) => { const handler = sessions.get(id); if (handler) handler(kind, text); };
+
+// Safari may use its speech service. The browser controls permissions and where recognition runs.
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let speechId = 0;
+let activeSpeech;
+const browserSpeech = Recognition ? {
+  canListen: () => true,
+  listen(language, offline) {
+    const id = ++speechId;
+    const notify = (kind, text) => window.onAndroidSpeech(kind, text, id);
+    activeSpeech?.recognition.abort();
+    if (offline) {
+      setTimeout(() => notify('error', 'offline-unsupported'), 0);
+      return id;
+    }
+    const recognition = new Recognition();
+    recognition.lang = language || navigator.language;
+    recognition.interimResults = true;
+    const timer = setTimeout(() => recognition.abort(), 60_000);
+    const finish = (kind, text) => {
+      clearTimeout(timer);
+      if (activeSpeech?.id !== id) return;
+      activeSpeech = null;
+      notify(kind, text);
+    };
+    recognition.onstart = () => notify('ready');
+    recognition.onresult = (event) => {
+      const result = event.results[event.resultIndex];
+      if (result.isFinal) finish('final', result[0].transcript);
+      else notify('partial', result[0].transcript);
+    };
+    recognition.onerror = ({ error }) => finish('error',
+      ({ 'not-allowed': 'permission', 'service-not-allowed': 'permission-blocked', network: '2', aborted: 'cancelled' })[error] || '7');
+    recognition.onend = () => finish('error', '7');
+    activeSpeech = { id, recognition };
+    try { recognition.start(); }
+    catch (_) { setTimeout(() => finish('error', 'unavailable'), 0); }
+    return id;
+  },
+  stopListening(id) { if (activeSpeech?.id === id) activeSpeech.recognition.stop(); },
+  cancelListening(id) { if (activeSpeech?.id === id) activeSpeech.recognition.abort(); },
+} : null;
 
 const MAX_CHARS = 1000; // Dictation.MaxChars on the agent
 
@@ -33,12 +75,13 @@ W.dictate = {
     box.append(mic, said, note);
 
     let alive = true, session = 0;
-    const can = !!(bridge && bridge.listen && bridge.canListen);
-    const visible = () => !document.body.classList.contains('night') && pages[curPage] === page && !box.closest('.stack-item:not(.active)');
+    const speech = bridge || (PWA ? browserSpeech : null);
+    const can = !!(speech?.listen && speech.canListen);
+    const visible = () => !document.hidden && !document.body.classList.contains('night') && pages[curPage] === page && !box.closest('.stack-item:not(.active)');
     let watch = 0;
     const done = () => { sessions.delete(session); session = 0; mic.classList.remove('on'); clearInterval(watch); watch = 0; };
     // update() reaches only widgets near the shown page and stops at night, so a session watches by itself
-    const guard = () => { if (session && !visible()) { bridge.cancelListening(session); done(); say('w.dictate.tap'); } };
+    const guard = () => { if (session && !visible()) { speech.cancelListening(session); done(); say('w.dictate.tap'); } };
     const say = (key) => { note.textContent = key ? t(key) : ''; };
 
     async function send(text) {
@@ -80,11 +123,11 @@ W.dictate = {
 
     mic.onclick = () => {
       haptic();
-      if (!can) { say('w.dictate.update'); return; }
-      if (session) { bridge.stopListening(session); return; }
-      if (!bridge.canListen()) { say('w.dictate.unavailable'); return; }
+      if (!can) { say(PWA ? 'w.dictate.unavailable' : 'w.dictate.update'); return; }
+      if (session) { speech.stopListening(session); return; }
+      if (!speech.canListen()) { say('w.dictate.unavailable'); return; }
       // a session another widget runs is cancelled by the bridge, and that widget hears so through its own id
-      session = bridge.listen(String(o.language || '').trim(), o.offline === true) || 0;
+      session = speech.listen(String(o.language || '').trim(), o.offline === true) || 0;
       if (!session) return;
       sessions.set(session, onSpeech);
       watch = setInterval(guard, 500);
@@ -93,7 +136,9 @@ W.dictate = {
       say('w.dictate.listening');
     };
 
-    if (!can) say('w.dictate.update');
+    document.addEventListener('visibilitychange', guard);
+    if (PWA && can && o.offline !== true) box.append(h('small', 'muted', 'Browser speech recognition may use an online service.'));
+    if (!can) say(PWA ? 'w.dictate.unavailable' : 'w.dictate.update');
     else if (o.control !== true) say('w.dictate.controlOff');
 
     return {
@@ -103,7 +148,8 @@ W.dictate = {
       },
       destroy() {
         alive = false;
-        if (session) bridge.cancelListening(session);
+        document.removeEventListener('visibilitychange', guard);
+        if (session) speech.cancelListening(session);
         done();
       },
     };

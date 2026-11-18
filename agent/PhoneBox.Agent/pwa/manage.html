@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhoneBox web app setup</title>
+<style>
+  :root { color-scheme: dark; font: 16px system-ui, sans-serif; background: #06080b }
+  body { max-width: 45rem; margin: 2rem auto; padding: 0 1rem; color: #eef2f6 }
+  a { color: #7dd3fc } button { font: inherit; padding: .4rem .7rem }
+  output, code { overflow-wrap: anywhere } li { margin: .5rem 0 } img { display: block; width: 240px; margin: 1rem 0; background: white }
+</style>
+</head>
+<body>
+<p><a href="/">← PhoneBox settings</a></p>
+<h1>PhoneBox web app setup</h1>
+<p>Open the HTTPS address in Safari. Confirm that Safari trusts the certificate. Use Share → Add to Home Screen, then open PhoneBox from its icon. Enter a pairing code in the installed app.</p>
+<p>Certificate expires: <time id="expires"></time></p>
+<p>HTTPS address: <a id="address" rel="noreferrer"></a></p>
+<button id="pair">Create pairing code</button>
+<p id="result" hidden><code id="code"></code> <button id="copy">Copy code</button><br>
+<a id="link" rel="noreferrer">Open with this code</a><img id="qr" alt="QR code for pairing in Safari">
+The code expires after five minutes or one successful pairing.</p>
+<h2>Paired devices</h2>
+<ul id="devices"></ul>
+<p><button id="refresh">Refresh devices</button></p>
+<output id="status" role="status"></output>
+<script>
+  const byId = (id) => document.getElementById(id);
+  async function request(path, method = 'GET') {
+    const r = await fetch('/pwa/manage' + path, { method, headers: { 'X-PhoneBox-Panel': '1' } });
+    if (!r.ok) throw new Error('Request failed (' + r.status + ').');
+    return r.status === 204 ? null : r.json();
+  }
+  async function update() {
+    const { url, certificateExpires, devices } = await request('');
+    byId('expires').textContent = new Date(certificateExpires).toLocaleString();
+    byId('address').textContent = url;
+    byId('address').href = url;
+    byId('devices').replaceChildren(...devices.map((device) => {
+      const li = document.createElement('li');
+      li.textContent = device.name + ' · ' + device.id + ' · ' +
+        (device.lastSeen ? 'Seen ' + new Date(device.lastSeen).toLocaleString() : 'No panel request since agent startup') + ' ';
+      const revoke = document.createElement('button');
+      revoke.textContent = 'Revoke';
+      revoke.onclick = safe(async () => { await request('/' + device.id, 'DELETE'); await update(); });
+      li.append(revoke);
+      return li;
+    }));
+  }
+  const safe = (action) => async () => {
+    try { byId('status').textContent = ''; await action(); }
+    catch (error) { byId('status').textContent = error.message; }
+  };
+  byId('pair').onclick = safe(async () => {
+    const { code, link, qr } = await request('/pair', 'POST');
+    byId('code').textContent = code;
+    byId('link').href = link;
+    byId('qr').src = 'data:image/svg+xml,' + encodeURIComponent(qr);
+    byId('result').hidden = false;
+  });
+  byId('copy').onclick = safe(() => navigator.clipboard.writeText(byId('code').textContent));
+  byId('refresh').onclick = safe(update);
+  safe(update)();
+</script>
+</body>
+</html>

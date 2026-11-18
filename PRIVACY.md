@@ -39,6 +39,19 @@ Last updated: 2026-11-15 (PhoneBox 0.9.6).
 remove the agent together with its settings, pushed data and log (without the switch, settings are kept). Uninstalling
 the Android app removes everything on the phone.
 
+## iOS and iPadOS web app in this fork
+
+The opt-in browser listener sends the same panel data directly to your paired browser over trusted HTTPS.
+The browser stores a host-only HTTP-only session cookie. The agent's `config.json.pwa-sessions.json` keeps
+device labels and token digests for pairing and revocation. The service worker caches public panel assets.
+The browser stores the public layout and local widget settings separately. Clear the site's data or remove
+the Home Screen app to erase its local copy. Revoke the device from the PC to end its agent session.
+
+The browser sends a pairing code only to your agent. Built-in web widgets use the source providers listed below.
+When you tap Dictation on an enabled widget, the browser's speech service may process microphone audio online.
+The recognized text goes to your agent only when the widget's desktop typing option is enabled. PhoneBox does not
+enable browser recognition for widgets configured to require offline recognition.
+
 ## Connections made by default
 
 Each of these servers sees your IP address, like any web request. PhoneBox sends none of them an identifier for you

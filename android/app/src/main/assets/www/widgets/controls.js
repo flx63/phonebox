@@ -620,8 +620,6 @@ for (const [type, title, mode] of [
 ]) registerDeckWidget(type, title, mode);
 for (const type of Object.keys(groups)) registerDeckWidget(type, type.split('-').map(s => s[0].toUpperCase() + s.slice(1)).join(' '));
 
-W['meeting-status'] = W.onair;
-
 async function integrationCommand(path, values = {}) {
   const result = await api('/controls/' + path + '?' + new URLSearchParams(values), 'POST', 20000);
   if (!result.ok) throw new Error(result.error || 'Integration refused this control');

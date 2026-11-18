@@ -28,6 +28,11 @@ flowchart LR
   (`/api/stream`); plain polling remains as the fallback.
 - The agent samples only what is on screen: process lists and command widgets run only while a phone looks at them.
 
+## iOS and iPadOS web app
+
+The fork serves the same panel over a dedicated HTTPS origin. See [PWA setup](PWA_IOS_SETUP.md) and
+[transport architecture](../PWA_ARCHITECTURE.md).
+
 ## Development
 
 Contributions are welcome: read [CONTRIBUTING.md](../CONTRIBUTING.md) first (scope, the security model, privacy and tests).

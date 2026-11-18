@@ -1,0 +1,45 @@
+body.pwa #pager, body.pwa .page { height: 100dvh; }
+body.pwa .page {
+  padding-top: calc(10px + env(safe-area-inset-top));
+  padding-bottom: calc(17px + env(safe-area-inset-bottom));
+}
+body.pwa #dots { bottom: env(safe-area-inset-bottom); }
+body.pwa.controls-top #dots { top: env(safe-area-inset-top); bottom: auto; }
+body.pwa #offline { top: calc(8px + env(safe-area-inset-top)); }
+body.pwa #overview {
+  padding-top: max(14px, env(safe-area-inset-top));
+  padding-bottom: max(14px, env(safe-area-inset-bottom));
+}
+body.pwa .ov-head { flex-wrap: wrap; }
+.pwa-wake { display: inline-flex; align-items: center; gap: .4em; touch-action: manipulation; }
+.pwa-setup {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  display: grid;
+  place-items: safe center;
+  overflow: auto;
+  padding: max(14px, env(safe-area-inset-top)) var(--pad-r) max(14px, env(safe-area-inset-bottom)) var(--pad-l);
+  background: var(--bg);
+}
+.pwa-pair {
+  width: min(100%, 26rem);
+  display: grid;
+  gap: .65rem;
+  line-height: 1.35;
+}
+.pwa-pair h1 { font-size: 1.4rem; }
+.pwa-pair p { color: var(--muted); }
+.pwa-pair input, .pwa-pair button {
+  width: 100%;
+  display: block;
+  font: inherit;
+  font-size: 1rem;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card-hi);
+  padding: .7rem;
+}
+.pwa-pair input { -webkit-user-select: text; user-select: text; }
+.pwa-pair button { touch-action: manipulation; }

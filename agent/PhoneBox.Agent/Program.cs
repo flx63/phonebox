@@ -33,6 +33,18 @@ configStore.PersistGenerated(); // keep the Wi-Fi token stable across restarts
 var lanCfg = configStore.Get().Lan;
 var lanCert = lanCfg.Enabled ? Lan.Certificate() : null;
 
+Pwa? pwa = null;
+string? pwaError = null;
+if (configStore.Get().Pwa is { Enabled: true } browser)
+{
+    try { pwa = new Pwa(browser, configPath, Port, lanCert is not null ? lanCfg.Port : null); }
+    catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or
+        System.Security.Cryptography.CryptographicException or JsonException or InvalidOperationException)
+    {
+        pwaError = ex.Message;
+    }
+}
+
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
     Args = args,
@@ -46,6 +58,7 @@ builder.WebHost.ConfigureKestrel(k =>
     k.Listen(IPAddress.Loopback, Port);
     // Wi-Fi / Tailscale: HTTPS with a pinned self-signed certificate, token required (see Lan.cs).
     if (lanCert is not null) k.Listen(IPAddress.Any, lanCfg.Port, l => l.UseHttps(lanCert));
+    if (pwa is not null) k.Listen(pwa.Address, pwa.Port, l => l.UseHttps(tls => { tls.ServerCertificate = pwa.Certificate; tls.ServerCertificateChain = pwa.Chain; }));
 });
 builder.Logging.ClearProviders();
 builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
@@ -93,6 +106,10 @@ AddMonitor<ChargeGuard>(builder.Services);
 builder.Services.AddHostedService<Tray>();
 
 var app = builder.Build();
+if (pwaError is not null) app.Logger.LogError("PhoneBox web app is disabled: {Reason}", pwaError);
+pwa?.MapManagement(app, Port);
+if (pwa is not null)
+    app.Use((ctx, next) => ctx.Connection.LocalPort == pwa.Port ? pwa.Handle(ctx, next) : next(ctx));
 
 app.MapGet("/api/controls/state", async (ControlDeck deck, CancellationToken ct) => Results.Json(await deck.Snapshot(ct)));
 app.MapPost("/api/controls/command/{kind}", async (string kind, string? id, string? op, int? value, bool? muted,
@@ -171,6 +188,7 @@ app.Use((ctx, next) =>
 app.UseRouting();
 app.Use(async (ctx, next) =>
 {
+    if (ctx.Items.ContainsKey(typeof(Pwa))) { await next(); return; }
     var origin = ctx.Request.Headers.Origin.ToString();
     var keyless = false; // a Wi-Fi request let in without a key (pairing claim): it must not touch any phone state
     if (lanCert is not null && ctx.Connection.LocalPort == lanCfg.Port)
@@ -318,7 +336,12 @@ app.MapGet("/", () =>
 {
     using var s = AppPaths.Resource("settings.html")!;
     using var r = new StreamReader(s);
-    return Results.Content(r.ReadToEnd(), "text/html; charset=utf-8");
+    var html = r.ReadToEnd();
+    if (pwa is not null)
+        html = html.Replace("<!-- PWA setup -->", """<a class="btn" href="/pwa/setup">Web app setup</a>""");
+    else if (pwaError is not null)
+        html = html.Replace("<!-- PWA setup -->", """<span class="hint">Web app disabled. See the agent log.</span>""");
+    return Results.Content(html, "text/html; charset=utf-8");
 });
 // The phone's panel (embedded at build time) for the live preview in the layout editor; local port only.
 app.MapGet("/panel/{*file}", (string? file, HttpRequest req) =>
@@ -609,8 +632,9 @@ app.MapGet("/api/state", (long? ev, HttpContext ctx) => Results.Json(State(ctx.R
 app.MapGet("/api/stream", async (HttpContext ctx, PushStore push, SessionMonitor sessions, GitHubMonitor gh, SpectrumAnalyzer spectrum, ILogger<Program> log) =>
 {
     var ct = ctx.RequestAborted;
-    var isPhone = ctx.Request.Headers.ContainsKey("X-PhoneBox-App");
-    var via = ctx.Connection.LocalPort == Port ? "USB/local" : "Wi-Fi";
+    var browserDevice = ctx.Items[typeof(Pwa)] as PwaSessions.Device;
+    var isPhone = browserDevice is not null || ctx.Request.Headers.ContainsKey("X-PhoneBox-App");
+    var via = browserDevice is not null ? "PWA" : ctx.Connection.LocalPort == Port ? "USB/local" : "Wi-Fi";
     log.LogInformation("live stream opened ({Who}, {Via})", isPhone ? "phone" : "other client", via);
     ctx.Response.ContentType = "text/event-stream";
     ctx.Response.Headers["X-Accel-Buffering"] = "no";
@@ -620,8 +644,12 @@ app.MapGet("/api/stream", async (HttpContext ctx, PushStore push, SessionMonitor
         await ctx.Response.WriteAsync($"event: {name}\ndata: {JsonSerializer.Serialize(data, opts)}\n\n", ct);
         await ctx.Response.Body.FlushAsync(ct);
     }
-    using var wake = new SemaphoreSlim(0);
-    void OnEmit() { try { wake.Release(); } catch (ObjectDisposedException) { } }
+    using var wake = new SemaphoreSlim(0, 1);
+    void OnEmit()
+    {
+        if (wake.CurrentCount > 0) return;
+        try { wake.Release(); } catch (ObjectDisposedException) { } catch (SemaphoreFullException) { }
+    }
     push.Emitted += OnEmit;
     try
     {
@@ -637,6 +665,7 @@ app.MapGet("/api/stream", async (HttpContext ctx, PushStore push, SessionMonitor
             if (now >= next)
             {
                 if (isPhone) Interlocked.Exchange(ref ApprovalStore.PhoneLastSeen, now);
+                if (browserDevice is not null) Pwa.Heartbeat(browserDevice);
                 await Send("state", State(ctx.RequestServices, null));
                 if (tick++ % 2 == 0)
                 {

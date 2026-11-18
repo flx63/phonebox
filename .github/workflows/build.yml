@@ -19,6 +19,7 @@ jobs:
       - run: |
           python3 tools/check-release.py
           python3 tools/test-winget-manifests.py
+          python3 tools/generate-pwa-widget-matrix.py --check
 
   android:
     name: Android panel (APK)
@@ -103,6 +104,9 @@ jobs:
       # the same build as the release (release.yml), so a pull request runs what ships
       - name: Publish agent (self-contained, single file)
         run: dotnet publish agent/PhoneBox.Agent -c Release -f ${{ matrix.tfm }} -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -o out --nologo
+      - name: Real-agent PWA HTTPS and session integration
+        if: matrix.rid == 'linux-x64'
+        run: python3 tools/test-pwa.py out/PhoneBoxAgent
       - name: Sign macOS apphost ad hoc
         if: startsWith(matrix.rid, 'osx-')
         run: codesign --force --sign - out/PhoneBoxAgent
